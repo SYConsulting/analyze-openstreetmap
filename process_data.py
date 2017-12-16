@@ -141,25 +141,39 @@ if __name__ == "__main__":
     # Fetch OpenStreetMap data for a custom grid via Overpass API
     api = overpy.Overpass()
     result = api.query("(node(40.74,-73.96,40.750,-73.94);<;);out meta;")
-    print("# of Nodes:     %s" % len(result.nodes))
-    print("# of Ways:      %s" % len(result.ways))
+    print("Retrieved %s Nodes from OpenStreetMap" % len(result.nodes))
+    print("Retrieved %s Ways from OpenStreetMap" % len(result.ways))
 
     # Audit data and generate overwrites for data cleaning
     overwrites = audit_ways(result.ways)
+    print("Found %s overwrites to be applied to map data." % len(overwrites))
 
     # Connect to MongoDB Atlas
+    print("Begin uploading map data to MongoDB")
     client = pymongo.MongoClient("mongodb+srv://public_access:GoData2017!@analyze-openstreetmap-vhq3i.mongodb.net/map_lic")
     db = client.map_lic
 
     # Load data into mongo DB
     db_nodes = db.nodes
     db_nodes.delete_many({})
+    upl_cnt = 0
     for node in result.nodes:
-        node_data = shape_node(node)
-        db_nodes.insert_one(node_data)
+        try:
+            node_data = shape_node(node)
+            db_nodes.insert_one(node_data)
+            upl_cnt += 1
+        except:
+            print("Error uploading node id %s " % node.id)
+    print("Uploaded %s documents into nodes collection in MongoDB.")
 
     db_ways = db.ways
     db_ways.delete_many({})
+    upl_cnt = 0
     for way in result.ways:
-        way_data = shape_way(way)
-        db_ways.insert_one(way_data)
+        try:
+            way_data = shape_way(way)
+            db_ways.insert_one(way_data, overwrites)
+            upl_cnt += 1
+        except:
+            print("Error uploading way id %s" % way.id)
+    print("Uploaded %s documents into ways collection in MongoDB.")
