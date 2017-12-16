@@ -12,27 +12,6 @@ street_types_map = {'Avenue': 'Ave', 'Boulevard': 'Blv', 'Court': 'Ct',
                          'Square': 'Sq', 'Street': 'St'}
 cfcc_types_re = re.compile(r'([A-C])(\d{1,2})')
 
-# for a list of nodes/ways/relations, return a dictionary containing
-# unique tag values found for a given key, and corresponding number
-# of elements tagged with that key:value pair
-def count_tags(key, elements):
-    values = defaultdict(int)
-    for element in elements:
-        value = element.tags.get(key)
-        if value:
-            values[element.tags.get(key)]+=1
-    return values
-
-# for a list of elements, return a dictionary containing the distinct
-# list of attributes and corresponding number of keys tagged with
-# that attribute
-def audit_way_tags(ways):
-    way_tags = defaultdict(int)
-    for element in elements:
-        for tag in element.tags:
-            way_tags[tag] += 1
-    return way_tags
-
 # Check if given element is a street
 def is_street(element):
     highway = element.tags.get("highway")
@@ -136,44 +115,70 @@ def shape_node(node):
                 output[tag_k] = tag_v
     return output
 
+# Retrieve Mongo DB collections object based on overpy object type
+def insert_item(overpy_obj, data, db):
+    if type(overpy_obj) is overpy.Node: return db.nodes.insert_one(data)
+    if type(overpy_obj) is overpy.Way: return db.ways.insert_one(data)
+    raise(Exception(
+        "Unrecognized overpy object %s cannot be inserted into MongoDB."
+        % type(overpy_obj)))
+
+# Get shape function by overpy object err_type
+def shape_item(overpy_obj, overwrites):
+    if type(overpy_obj) is overpy.Node: return shape_node(overpy_obj)
+    if type(overpy_obj) is overpy.Way: return shape_way(overpy_obj, overwrites)
+
+    raise(Exception(
+         "Unrecognized overpy object %s. No function found to process data."
+         % type(overpy_obj)))
+
+def clear_db(db):
+    db.nodes.delete_many({})
+    db.ways.delete_many({})
+
+# Convert overpy object into python dictionary then load into mongodb
+def convert_then_insert_data(data, db, overwrites=None):
+    err_data = {}
+    for i, item in enumerate(data):
+        try:
+            item_dict = shape_item(item, overwrites)
+            item_collection = insert_item(item, item_dict, db)
+        except Exception as err:
+            err_data[item.id] = str(err)
+        if (i % 100) == 0: print(".", end='', flush=True)
+    print("")
+    print(
+        "Uploaded %s documents into nodes collection in MongoDB." %
+        (len(data) - len(err_data)))
+    if len(err_data) > 0:
+        print("Skipped %s nodes due to following errors:" % len(err_data))
+        for err_type in set(err_data.values()):
+            print(err_type)
+
+
 if __name__ == "__main__":
 
     # Fetch OpenStreetMap data for a custom grid via Overpass API
     api = overpy.Overpass()
     result = api.query("(node(40.74,-73.96,40.750,-73.94);<;);out meta;")
-    print("Retrieved %s Nodes from OpenStreetMap" % len(result.nodes))
-    print("Retrieved %s Ways from OpenStreetMap" % len(result.ways))
+    print("Retrieved %s Nodes from OpenStreetMap." % len(result.nodes))
+    print("Retrieved %s Ways from OpenStreetMap. " % len(result.ways))
 
     # Audit data and generate overwrites for data cleaning
     overwrites = audit_ways(result.ways)
-    print("Found %s overwrites to be applied to map data." % len(overwrites))
+    print("Audit process returned %s overwrites to be applied to map data."
+            % len(overwrites))
 
     # Connect to MongoDB Atlas
-    print("Begin uploading map data to MongoDB")
     client = pymongo.MongoClient("mongodb+srv://public_access:GoData2017!@analyze-openstreetmap-vhq3i.mongodb.net/map_lic")
     db = client.map_lic
+    clear_db(db)
 
-    # Load data into mongo DB
-    db_nodes = db.nodes
-    db_nodes.delete_many({})
-    upl_cnt = 0
-    for node in result.nodes:
-        try:
-            node_data = shape_node(node)
-            db_nodes.insert_one(node_data)
-            upl_cnt += 1
-        except:
-            print("Error uploading node id %s " % node.id)
-    print("Uploaded %s documents into nodes collection in MongoDB.")
+    # Load nodes data into nodes collection in mongo DB
+    print("Begin uploading nodes data to MongoDB", end='')
+    convert_then_insert_data(result.nodes, db)
 
-    db_ways = db.ways
-    db_ways.delete_many({})
-    upl_cnt = 0
-    for way in result.ways:
-        try:
-            way_data = shape_way(way)
-            db_ways.insert_one(way_data, overwrites)
-            upl_cnt += 1
-        except:
-            print("Error uploading way id %s" % way.id)
-    print("Uploaded %s documents into ways collection in MongoDB.")
+
+    # Load ways data into ways collection in mongo DB
+    print("Begin uploading ways data to MongoDB", end='')
+    convert_then_insert_data(result.ways, db, overwrites)
