@@ -4,6 +4,7 @@ import re
 import pymongo
 import sys
 from collections import defaultdict
+import time
 
 # Global Variables
 highway_types = ['primary', 'residential', 'secondary']
@@ -148,13 +149,17 @@ def shape_way(way, overwrites):
 
     output = {}
     output['id'] = way.id
-    output['type'] = 'way'
+    output['document_type'] = 'way'
 
-    nodes = way.get_nodes(resolve_missing=True)
-    for node in nodes:
-        if 'nodes' not in output:
-            output['nodes'] = []
-        output['nodes'].append(node.id)
+    try:
+        nodes = way.get_nodes(resolve_missing=False)
+        for node in nodes:
+            if 'nodes' not in output:
+                output['nodes'] = []
+            output['nodes'].append(node.id)
+    except overpy.exception.DataIncomplete:
+        pass
+
 
     if way.tags:
         for tag_k in way.tags:
@@ -203,7 +208,7 @@ def shape_way(way, overwrites):
 def shape_node(node):
     output = {}
     output['id'] = node.id
-    output['type'] = 'node'
+    output['document_type'] = 'node'
     output['pos'] = [float(node.lat), float(node.lon)]
 
     if node.tags:
@@ -246,17 +251,18 @@ def clear_db(db_collection):
 # Convert overpy object into python dictionary then load into mongodb
 def convert_then_insert_data(data, db_collection, overwrites=None):
     err_data = {}
+    out_data = []
     for i, item in enumerate(data):
         try:
-            item_dict = shape_item(item, overwrites)
-            item_collection = db_collection.insert_one(item_dict)
+            out_data.append(shape_item(item, overwrites))
         except Exception as err:
             err_data[item.id] = str(err)
-        if (i % 100) == 0: print(".", end='', flush=True)
+        if (i % 200) == 0: print(".", end='', flush=True)
     print("")
+    results = db_collection.insert_many(out_data)
     print(
         "Uploaded %s documents into nodes collection in MongoDB." %
-        (len(data) - len(err_data)))
+        (len(results.inserted_ids)))
     if len(err_data) > 0:
         print("Skipped %s nodes due to following errors:" % len(err_data))
         for err_type in set(err_data.values()):
@@ -301,13 +307,18 @@ if __name__ == "__main__":
         client = pymongo.MongoClient("mongodb+srv://public_access:GoData2017!@analyze-openstreetmap-vhq3i.mongodb.net/map_lic")
         db = client.map
         db_collection = db.lic
-        #clear_db(db_collection)
+        clear_db(db_collection)
+
+        start_time = time.time()
 
         # Load nodes data into nodes collection in mongo DB
-        #print("Begin uploading nodes data to MongoDB", end='')
-        #convert_then_insert_data(result.nodes, db_collection)
+        print("Begin uploading nodes data to MongoDB", end='')
+        convert_then_insert_data(result.nodes, db_collection, overwrites)
 
 
         # Load ways data into ways collection in mongo DB
         print("Begin uploading ways data to MongoDB", end='')
         convert_then_insert_data(result.ways, db_collection, overwrites)
+
+        print("Finished uploading map data to MongoDB in %s minutes."
+            % ((time.time() - start_time)/60))
