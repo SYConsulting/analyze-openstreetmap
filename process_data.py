@@ -23,7 +23,9 @@ def is_number(input_string):
     except:
         return False
 
-# Check if given element is a street
+# Check if given element is a street, return a tuple where the first element is
+# a boolean indicating if the given way is a street, the second element contains
+# error message if a way has incompatible highway type and cfcc code.
 def is_street(element):
     highway = element.tags.get("highway")
     if highway in highway_types:
@@ -31,13 +33,14 @@ def is_street(element):
         if cfcc:
             cfcc_base, cfcc_type = process_cfcc(cfcc)
             if cfcc_base =='A' and 21 <= cfcc_type <= 49:
-                return True
+                return (True, None)
             else:
-                return False
+                return (False, '%s: highway=%s, cfcc=%s'
+                    % (element.id, highway, cfcc))
         else:
-            return True
+            return (True, None)
     else:
-        return False
+        return (False, None)
 
 
 # Given street name, return a tuple containing name_base and name_type
@@ -72,13 +75,18 @@ def audit_ways(ways):
     print("Auditing open street map data.")
     audit_issues = {'Street with no name': [],
                     'Unable to infer street type': [],
-                    'Unknown street type': []}
+                    'Unknown street type': [],
+                    'Street with incorrect highway attribute': []}
 
     overwrites = {}
 
     for way in ways:
         #overwrite streets with no name
-        if is_street(way):
+        street_flag, street_issue = is_street(way)
+        if street_issue:
+            issue = audit_issues['Street with incorrect highway attribute']
+            issue.append(street_issue)
+        if street_flag:
             street_name = way.tags.get("name")
             street_name_alt = way.tags.get("name_1")
             street_type = way.tags.get("tiger:name_type")
